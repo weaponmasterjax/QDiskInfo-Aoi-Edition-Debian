@@ -26,29 +26,38 @@ jobs:
             platform: linux/amd64
             runs-on: ubuntu-24.04
     container:
-      # Use debian:trixie (Debian 13) or debian:bookworm (Debian 12) for glibc compatibility
       image: debian:trixie
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm \
-            base-devel     \
-            breeze         \
-            clang          \
-            cmake          \
-            libxkbcommon   \
-            mesa           \
-            patchelf       \
-            qt6-base       \
-            qt6ct          \
-            qt6-svg        \
-            qt6-tools      \
-            smartmontools  \
-            vulkan-devel   \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            git \
+            build-essential \
+            cmake \
+            clang \
+            libxkbcommon-dev \
+            libgl-dev \
+            libvulkan-dev \
+            patchelf \
+            qt6-base-dev \
+            qt6-svg-dev \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            qt6-wayland \
+            qt6ct \
+            libqt6svg6 \
+            kde-style-breeze \
+            breeze-icon-theme \
+            smartmontools \
+            binutils \
+            file \
+            strace \
             wget
+
+      - uses: actions/checkout@v4
 
       - name: Build
         run: |
@@ -61,7 +70,7 @@ jobs:
           ./qdiskinfo-appimage.sh
 
       - name: List Files
-        run: ls
+        run: ls -la
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4

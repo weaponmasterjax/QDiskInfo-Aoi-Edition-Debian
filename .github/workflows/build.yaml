@@ -80,7 +80,7 @@ jobs:
         run: |
           BASE_VERSION="$(sed -nE 's/^project\([^)]*VERSION[[:space:]]+([0-9][0-9A-Za-z.+~]*).*/\1/p' CMakeLists.txt | head -n 1)"
           BASE_VERSION="${BASE_VERSION:-0.4}"
-          SHORT_SHA="$(git rev-parse --short=9 HEAD)"
+          SHORT_SHA="$(printf '%s' "$GITHUB_SHA" | cut -c 1-9)"
           DEB_VERSION="${BASE_VERSION}+git${SHORT_SHA}"
           chmod +x ./scripts/build-deb.sh
           ./scripts/build-deb.sh \

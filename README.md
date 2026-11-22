@@ -80,7 +80,7 @@ If you are using QDiskInfo outside KDE, the arrows on the navigation keys and so
 
 ## Using CrystalDiskInfo Anime Themes
 The process is similar to the one above with a few changes:<br>
-First you must download the edition of CrystalDiskInfo you want (Aoi for example) in ZIP format from [here](https://crystalmark.info/en/download/), from this archive you shall copy the light and dark backgrounds as well as the good, caution, bad, unknown icons to dist/theme with the same name as the templates there.<br>
+First run `./scripts/fetch-aoi-themes.sh` (or pass a local archive path `./scripts/fetch-aoi-themes.sh /path/to/CrystalDiskInfo9_9_5Aoi.zip`) to dynamically download and unpack the CrystalDiskInfo Aoi theme backgrounds, `theme.ini` files, and chibi status sprites into `./themes/` (alternatively, place CrystalDiskInfo Aoi theme directories into `./themes/`).<br>
 Once you do that compile like above but when running CMake do this instead:
 ```sh
 cmake .. -DCMAKE_BUILD_TYPE:STRING=MinSizeRel -DQT_VERSION_MAJOR=6 -DINCLUDE_OPTIONAL_RESOURCES=ON -DCHARACTER_IS_RIGHT=ON -DENABLE_TRANSLATIONS=ON

@@ -32,10 +32,6 @@ file(GLOB_RECURSE PROJECT_SOURCES
     src/resources.qrc
 )
 
-if(INCLUDE_OPTIONAL_RESOURCES)
-    set(PROJECT_SOURCES ${PROJECT_SOURCES} dist/theme/theme_resources.qrc)
-endif()
-
 if(ENABLE_TRANSLATIONS)
     file(GLOB TS_FILES "${CMAKE_SOURCE_DIR}/translations/*.ts")
     if(QT_VERSION_MAJOR GREATER_EQUAL 6 AND QT_VERSION_MINOR GREATER_EQUAL 7)
@@ -96,6 +92,9 @@ install(FILES "dist/${PROJECT_NAME}.desktop"
         DESTINATION "share/applications")
 install(FILES "dist/${PROJECT_NAME}.svg"
         DESTINATION "share/icons/hicolor/scalable/apps")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/themes"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}"
+        OPTIONAL)
 
 if(QT_VERSION_MAJOR GREATER_EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})

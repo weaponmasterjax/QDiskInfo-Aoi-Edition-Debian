@@ -58,6 +58,7 @@ CACHEDIR="${XDG_CACHE_HOME:-$HOME/.cache}"
 export QT_PLUGIN_PATH="$CURRENTDIR/shared/lib/qt6/plugins"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-wayland;xcb}"
 export QT_STYLE_OVERRIDE="${QT_STYLE_OVERRIDE:-Breeze}"
+export QDISKINFO_THEME_DIR="$CURRENTDIR/themes"
 
 [ -f "$APPIMAGE".stylesheet ] && APPIMAGE_QT_THEME="$APPIMAGE.stylesheet"
 [ -f "$APPIMAGE_QT_THEME" ] && set -- "$@" "-stylesheet" "$APPIMAGE_QT_THEME"

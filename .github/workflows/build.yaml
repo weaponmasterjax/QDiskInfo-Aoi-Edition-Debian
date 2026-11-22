@@ -34,6 +34,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates \
+            curl \
+            unzip \
             git \
             build-essential \
             cmake \
@@ -59,6 +61,11 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Download and unpack Aoi themes
+        run: |
+          chmod +x ./scripts/fetch-aoi-themes.sh
+          ./scripts/fetch-aoi-themes.sh
+
       - name: Build
         run: |
           cmake -Bbuild -DCMAKE_BUILD_TYPE:STRING=MinSizeRel -DQT_VERSION_MAJOR=6 -DENABLE_TRANSLATIONS=ON -DINCLUDE_OPTIONAL_RESOURCES=ON -DCHARACTER_IS_RIGHT=ON
@@ -82,4 +89,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: QDiskInfo-Qt6-${{ matrix.arch }}-bin
-          path: ./build/QDiskInfo
+          path: |
+            ./build/QDiskInfo
+            ./themes

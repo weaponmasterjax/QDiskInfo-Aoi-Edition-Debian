@@ -26,7 +26,8 @@ jobs:
             platform: linux/amd64
             runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/pkgforge-dev/archlinux:latest
+      # Use debian:trixie (Debian 13) or debian:bookworm (Debian 12) for glibc compatibility
+      image: debian:trixie
 
     steps:
       - uses: actions/checkout@v4

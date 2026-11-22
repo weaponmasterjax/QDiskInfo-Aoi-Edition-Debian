@@ -86,3 +86,21 @@ Once you do that compile like above but when running CMake do this instead:
 cmake .. -DCMAKE_BUILD_TYPE:STRING=MinSizeRel -DQT_VERSION_MAJOR=6 -DINCLUDE_OPTIONAL_RESOURCES=ON -DCHARACTER_IS_RIGHT=ON -DENABLE_TRANSLATIONS=ON
 ```
 Regarding the `-DCHARACTER_IS_RIGHT` set it to ON for themes where the character is right (like Aoi) or OFF for most other themes.
+
+## Debian Packaging & GitHub Releases
+### Installing the `.deb` Package (Debian 13 / Trixie)
+Download `qdiskinfo-aoi_<version>_amd64.deb` (or `arm64.deb`) from [GitHub Releases](https://github.com/weaponmasterjax/QDiskInfo-Aoi-Edition-Debian/releases) and install it with `apt` so runtime dependencies (`smartmontools`, `pkexec`, `qt6-wayland`, and Qt6 SVG plugins) are installed automatically:
+```sh
+sudo apt install ./qdiskinfo-aoi_<version>_amd64.deb
+```
+`qdiskinfo-aoi` provides/replaces Debian's `qdiskinfo` package and installs Aoi themes under `/usr/share/QDiskInfo/themes`.
+
+### Automated CI Builds & Releases (GitHub Actions)
+- **CI Builds (`.github/workflows/build.yaml`)**: Every push to `main`, pull request, or manual dispatch builds `.deb` (`amd64` / `arm64`), `.AppImage`, and standalone binaries on `debian:trixie`, verifies `.deb` installation, and uploads workflow artifacts.
+- **Publishing a Release (`.github/workflows/release.yaml`)**: Push a version tag matching `v*`:
+  ```sh
+  git tag v0.4.1
+  git push origin v0.4.1
+  ```
+  or trigger the **Release** workflow manually from the GitHub Actions tab (`workflow_dispatch` with `tag`, optional `prerelease` and `draft` flags). The workflow builds `.deb` and `.AppImage` (`.zsync`) packages for both `amd64`/`x86_64` and `arm64`/`aarch64`, generates `SHA256SUMS.txt`, and creates the GitHub Release.
+- To package a `.deb` via CPack manually in a build environment, run `./scripts/build-deb.sh --fetch-themes` (or `cpack --config build/CPackConfig.cmake -G DEB`).

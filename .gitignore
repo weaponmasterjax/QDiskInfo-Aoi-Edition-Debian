@@ -57,3 +57,9 @@ build/
 
 # Dynamically fetched CrystalDiskInfo Aoi themes
 themes/
+
+# Packaging outputs
+*.deb
+deb-out/
+release-assets/
+!scripts/build-deb.sh

@@ -1,0 +1,258 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag name (e.g. v0.4.1 or v0.4.1-rc1)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark release as a prerelease"
+        required: false
+        type: boolean
+        default: false
+      draft:
+        description: "Create release as a draft"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      app_version: ${{ steps.meta.outputs.app_version }}
+      deb_version: ${{ steps.meta.outputs.deb_version }}
+      deb_release: ${{ steps.meta.outputs.deb_release }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      draft: ${{ steps.meta.outputs.draft }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute release metadata
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+            PRERELEASE="${INPUT_PRERELEASE:-false}"
+            DRAFT="${INPUT_DRAFT:-false}"
+          else
+            TAG="$REF_NAME"
+            DRAFT="false"
+            case "$TAG" in
+              *-*) PRERELEASE="true" ;;
+              *) PRERELEASE="false" ;;
+            esac
+          fi
+
+          if [ -z "$TAG" ] || printf '%s' "$TAG" | grep -q '[[:space:]]'; then
+            echo "Error: Invalid tag name '$TAG'" >&2
+            exit 1
+          fi
+          if ! git check-ref-format "refs/tags/$TAG"; then
+            echo "Error: Invalid git tag format '$TAG'" >&2
+            exit 1
+          fi
+
+          APP_VERSION="${TAG#v}"
+          APP_VERSION="${APP_VERSION#V}"
+          CANDIDATE_DEB_VERSION="$(printf '%s' "$APP_VERSION" | tr '-' '~')"
+
+          BASE_VERSION="$(sed -nE 's/^project\([^)]*VERSION[[:space:]]+([0-9][0-9A-Za-z.+~]*).*/\1/p' CMakeLists.txt | head -n 1)"
+          BASE_VERSION="${BASE_VERSION:-0.4}"
+          SHORT_SHA="$(git rev-parse --short=9 HEAD)"
+
+          if printf '%s\n' "$CANDIDATE_DEB_VERSION" | grep -Eq '^[0-9][A-Za-z0-9.+~]*$'; then
+            DEB_VERSION="$CANDIDATE_DEB_VERSION"
+          else
+            DEB_VERSION="${BASE_VERSION}+git${SHORT_SHA}"
+          fi
+          DEB_RELEASE="1+deb13"
+
+          {
+            echo "tag=$TAG"
+            echo "app_version=$APP_VERSION"
+            echo "deb_version=$DEB_VERSION"
+            echo "deb_release=$DEB_RELEASE"
+            echo "prerelease=$PRERELEASE"
+            echo "draft=$DRAFT"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            deb_arch: arm64
+            platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+          - arch: x86_64
+            deb_arch: amd64
+            platform: linux/amd64
+            runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+
+    steps:
+      - name: Install dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            unzip \
+            git \
+            build-essential \
+            cmake \
+            clang \
+            dpkg-dev \
+            libxkbcommon-dev \
+            libgl-dev \
+            libvulkan-dev \
+            patchelf \
+            qt6-base-dev \
+            qt6-svg-dev \
+            qt6-svg-plugins \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            qt6-wayland \
+            qt6ct \
+            libqt6svg6 \
+            kde-style-breeze \
+            breeze-icon-theme \
+            smartmontools \
+            binutils \
+            file \
+            strace \
+            wget
+
+      - uses: actions/checkout@v4
+
+      - name: Download and unpack Aoi themes
+        run: |
+          chmod +x ./scripts/fetch-aoi-themes.sh
+          ./scripts/fetch-aoi-themes.sh
+
+      - name: Build
+        run: |
+          cmake -Bbuild -DCMAKE_BUILD_TYPE:STRING=MinSizeRel -DCMAKE_INSTALL_PREFIX=/usr -DQT_VERSION_MAJOR=6 -DENABLE_TRANSLATIONS=ON -DINCLUDE_OPTIONAL_RESOURCES=ON -DCHARACTER_IS_RIGHT=ON
+          cmake --build build --parallel
+
+      - name: Package DEB
+        run: |
+          chmod +x ./scripts/build-deb.sh
+          ./scripts/build-deb.sh \
+            --build-dir ./build \
+            --output-dir ./release-assets \
+            --version "${{ needs.prepare.outputs.deb_version }}" \
+            --release "${{ needs.prepare.outputs.deb_release }}" \
+            --skip-build \
+            --require-themes
+
+      - name: Package AppImage
+        env:
+          VERSION: ${{ needs.prepare.outputs.app_version }}-debian13
+        run: |
+          chmod +x ./qdiskinfo-appimage.sh
+          ./qdiskinfo-appimage.sh
+          mkdir -p ./release-assets
+          cp -v ./QDiskInfo-*.AppImage* ./release-assets/
+
+      - name: Verify DEB install
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get install -y ./release-assets/qdiskinfo-aoi_*.deb
+          test -x /usr/bin/QDiskInfo
+          ! ldd /usr/bin/QDiskInfo | grep -q "not found"
+          dpkg-deb --field ./release-assets/qdiskinfo-aoi_*.deb Depends | grep -q "libqt6widgets6"
+          test -f /usr/share/QDiskInfo/themes/Aoi/AoiBackground-300.png
+          test -f /usr/share/QDiskInfo/themes/Aoi/SDdiskStatusGood100-300.png
+          test -f /usr/share/applications/QDiskInfo.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/QDiskInfo.svg
+          test -f /usr/share/icons/hicolor/256x256/apps/QDiskInfo.png
+          test -f /usr/share/doc/qdiskinfo-aoi/copyright
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.deb_arch }}
+          path: ./release-assets/*
+          retention-days: 7
+
+  release:
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          merge-multiple: true
+          path: ./release-assets
+
+      - name: Generate SHA256SUMS
+        run: |
+          rm -f ./release-assets/SHA256SUMS.txt ./SHA256SUMS.txt
+          (cd ./release-assets && sha256sum -- * > ../SHA256SUMS.txt)
+          mv ./SHA256SUMS.txt ./release-assets/SHA256SUMS.txt
+          ls -lh ./release-assets
+          cat ./release-assets/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: QDiskInfo Aoi Edition ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          draft: ${{ needs.prepare.outputs.draft == 'true' }}
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ./release-assets/*
+          body: |
+            ### Debian Packages (`.deb` for Debian 13 / Trixie)
+            Download the `.deb` matching your architecture (`amd64` or `arm64`) and install with `apt` (so runtime dependencies such as `smartmontools`, `pkexec`, `qt6-wayland`, and Qt6 SVG plugins are resolved automatically):
+            ```sh
+            sudo apt install ./qdiskinfo-aoi_${{ needs.prepare.outputs.deb_version }}-${{ needs.prepare.outputs.deb_release }}_amd64.deb
+            ```
+            *(Replace `amd64` with `arm64` on ARM64 systems.)*
+
+            ### AppImage
+            Download the `.AppImage` matching your architecture (`x86_64` or `aarch64`), make it executable, and run it:
+            ```sh
+            chmod +x QDiskInfo-${{ needs.prepare.outputs.app_version }}-debian13-*.AppImage
+            ./QDiskInfo-${{ needs.prepare.outputs.app_version }}-debian13-*.AppImage
+            ```
+
+            ### Checksum Verification
+            ```sh
+            sha256sum -c --ignore-missing SHA256SUMS.txt
+            ```

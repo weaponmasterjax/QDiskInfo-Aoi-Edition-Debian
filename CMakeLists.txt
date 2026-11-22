@@ -89,15 +89,25 @@ install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(FILES "dist/${PROJECT_NAME}.desktop"
-        DESTINATION "share/applications")
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
 install(FILES "dist/${PROJECT_NAME}.svg"
-        DESTINATION "share/icons/hicolor/scalable/apps")
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps")
+install(FILES "dist/${PROJECT_NAME}-256x256.png"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps"
+        RENAME "${PROJECT_NAME}.png")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/themes"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}"
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ
+        DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
         OPTIONAL)
+install(FILES "LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/qdiskinfo-aoi"
+        RENAME "copyright")
 
 if(QT_VERSION_MAJOR GREATER_EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
 endif()
 include(FeatureSummary)
 feature_summary(WHAT ALL INCLUDE_QUIET_PACKAGES FATAL_ON_MISSING_REQUIRED_PACKAGES)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Packaging.cmake")

@@ -10,7 +10,7 @@ APP=QDiskInfo
 APPIMAGETOOL="https://github.com/pkgforge-dev/appimagetool-uruntime/releases/download/continuous/appimagetool-$ARCH.AppImage"
 UPINFO="gh-releases-zsync|$(echo "$GITHUB_REPOSITORY" | tr '/' '|')|latest|*-$ARCH.AppImage.zsync"
 LIB4BN="https://raw.githubusercontent.com/VHSgunzo/sharun/refs/heads/main/lib4bin"
-VERSION="$(echo "$GITHUB_SHA" | cut -c 1-9)-debian13"
+VERSION="${VERSION:-$(echo "${GITHUB_SHA:-dev}" | cut -c 1-9)-debian13}"
 
 DEB_ARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
 QT6_PLUGINS="/usr/lib/${DEB_ARCH}/qt6/plugins"

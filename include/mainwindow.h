@@ -5,13 +5,18 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QColor>
 #include <QJsonObject>
 #include <QLabel>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QPaintEvent>
+#include <QPixmap>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QTableWidget>
+#include <QVector>
 #include <QWidget>
 #include <QProcess>
 #include <cmath>
@@ -94,9 +99,51 @@ private:
     void addNvmeLogTable(const QVector<QPair<QString, int>>& nvmeLogOrdered);
     void addSmartAttributesTable(const QJsonArray &attributes);
     void transformWindow();
-    void mousePressEvent(QMouseEvent*);
+
+protected:
+    void mousePressEvent(QMouseEvent*) override;
+    void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
+    struct AoiTheme {
+        QString name;
+        QString dirPath;
+        QString backgroundPath;
+        bool isDark = false;
+        QColor labelText = Qt::black;
+        QColor listText = Qt::black;
+        QColor listBg1 = QColor(0xFF, 0xFF, 0xFF);
+        QColor listBg2 = QColor(0xF8, 0xF8, 0xF8);
+        QColor listLine = QColor(0xE0, 0xE0, 0xE0);
+        QColor glassColor = QColor(0xFF, 0xFF, 0xFF);
+        int glassAlpha = 128;
+        int characterPosition = 1; // 1 = right, 0 = left
+    };
+
+    bool themeEnabled = false;
+    QVector<AoiTheme> availableThemes;
+    AoiTheme currentTheme;
+    QString aoiBaseThemeDir;
+    QMenu *menuTheme = nullptr;
+    QActionGroup *themeActionGroup = nullptr;
+    QAction *randomThemeAction = nullptr;
+    QWidget *characterSpacer = nullptr;
+    QPixmap currentBackgroundPixmap;
+    QPixmap cachedScaledBackground;
+    QSize cachedBackgroundSize;
+    qreal cachedBackgroundDpr = 0.0;
+    QString currentHealth;
+    QString currentPercentage;
+
+    void initThemes();
+    QStringList themeSearchDirs() const;
+    AoiTheme parseThemeIni(const QString &themeName, const QString &dirPath, const QString &bgPath) const;
+    void setupThemeMenu();
+    void applyTheme(const QString &themeName);
+    void selectRandomTheme(bool avoidCurrent = false);
+    void updateStatusSprite();
+
     QString mbSymbol;
     QString gbSymbol;
     QString tbSymbol;

@@ -5,13 +5,23 @@
 #include "custombutton.h"
 #include "jsonparser.h"
 
+#include <QCoreApplication>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QMessageBox>
+#include <QPainter>
+#include <QRandomGenerator>
+#include <QSet>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QUrl>
 #include <QTextEdit>
 #include <QDialogButtonBox>
+#include <algorithm>
 
 const int PRECISION_TOTALS_TO_STR = 2;
 const int PRECISION_CAPACITY_TO_STR = 0;
@@ -117,16 +127,12 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
-    QPair<QStringList, QJsonArray> values = Utils.scanDevices(initializing);
-    deviceOutputs = values.first;
-    devices = values.second;
-    if (!deviceOutputs.isEmpty()) {
-        updateUI();
+    if (INCLUDE_OPTIONAL_RESOURCES) {
+        initThemes();
     }
-    this->setFocus();
-    initializing = false;
+    themeEnabled = (INCLUDE_OPTIONAL_RESOURCES && !availableThemes.isEmpty());
 
-    if (!INCLUDE_OPTIONAL_RESOURCES || CHARACTER_IS_RIGHT) {
+    if (!themeEnabled || CHARACTER_IS_RIGHT) {
         QLayoutItem *leftSpacerItem = gridLayout->itemAtPosition(2, 0);
         if (leftSpacerItem) {
             gridLayout->removeItem(leftSpacerItem);
@@ -141,19 +147,33 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
 
-    if (INCLUDE_OPTIONAL_RESOURCES) {
+    if (themeEnabled) {
         transformWindow();
+        setupThemeMenu();
     } else {
         delete temperatureLabelHorizontal;
         delete healthStatusLabelHorizontal;
         delete temperatureValueHorizontal;
         delete healthStatusValueHorizontal;
+        temperatureLabelHorizontal = nullptr;
+        healthStatusLabelHorizontal = nullptr;
+        temperatureValueHorizontal = nullptr;
+        healthStatusValueHorizontal = nullptr;
     }
 
     mbSymbol = locale.formattedDataSize(1 << 20, 1, QLocale::DataSizeTraditionalFormat).split(' ')[1];
     gbSymbol = locale.formattedDataSize(1 << 30, 1, QLocale::DataSizeTraditionalFormat).split(' ')[1];
     tbSymbol = locale.formattedDataSize(qint64(1) << 40, 1, QLocale::DataSizeTraditionalFormat).split(' ')[1];
     pbSymbol = locale.formattedDataSize(qint64(1) << 50, 1, QLocale::DataSizeTraditionalFormat).split(' ')[1];
+
+    QPair<QStringList, QJsonArray> values = Utils.scanDevices(initializing);
+    deviceOutputs = values.first;
+    devices = values.second;
+    if (!deviceOutputs.isEmpty()) {
+        updateUI();
+    }
+    this->setFocus();
+    initializing = false;
 }
 
 MainWindow::~MainWindow()
@@ -788,7 +808,7 @@ void MainWindow::populateWindow(const QJsonObject &localObj, const QString &heal
     }
 
     QLabel *temperatureValueLabel, *healthStatusValueLabel;
-    if (INCLUDE_OPTIONAL_RESOURCES) {
+    if (themeEnabled) {
         temperatureValueLabel = temperatureValueHorizontal;
         healthStatusValueLabel = healthStatusValueHorizontal;
     } else {
@@ -831,26 +851,15 @@ void MainWindow::populateWindow(const QJsonObject &localObj, const QString &heal
         healthStatusValueLabel->setStyleSheet("background-color: " + naColor.name() + ";");
     }
 
-    if (INCLUDE_OPTIONAL_RESOURCES) {
-        QPixmap statusAnimeBackground;
-        QSize labelSize(100, 30);
-        if (health == tr("Bad")) {
-            statusAnimeBackground = QPixmap(":/icons/bad.png");
-        } else if (health == tr("Caution")){
-            statusAnimeBackground = QPixmap(":/icons/caution.png");
-        } else if (health == tr("Good")) {
-            statusAnimeBackground = QPixmap(":/icons/good.png");
-        } else {
-            statusAnimeBackground = QPixmap(":/icons/unknown.png");
-        }
-        QPixmap statusAnimeBackgroundScaled = statusAnimeBackground.scaled(labelSize, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-        statusLabel->setPixmap(statusAnimeBackgroundScaled);
-        statusLabel->setToolTip(health);
+    currentHealth = health;
+    currentPercentage = percentage;
+    if (themeEnabled) {
+        updateStatusSprite();
     }
 
     QString percentageText = "";
     if (!percentage.isEmpty()) {
-        if (INCLUDE_OPTIONAL_RESOURCES) {
+        if (themeEnabled) {
             percentageText = "  (" + percentage + ")"; // 2 spaces is not a mistake
         } else {
             percentageText = "<br>" + percentage;
@@ -1244,8 +1253,377 @@ void MainWindow::addSmartAttributesTable(const QJsonArray &attributes)
     tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
 }
 
-void MainWindow::transformWindow() {
-    setMaximumSize(960, 960);
+QStringList MainWindow::themeSearchDirs() const
+{
+    QStringList candidates;
+    const QString envDir = qEnvironmentVariable("QDISKINFO_THEME_DIR");
+    if (!envDir.isEmpty()) {
+        candidates << envDir;
+    }
+
+    const QString appDir = QCoreApplication::applicationDirPath();
+    candidates << appDir + QStringLiteral("/themes")
+               << appDir + QStringLiteral("/../themes")
+               << appDir + QStringLiteral("/../../themes")
+               << appDir + QStringLiteral("/../share/QDiskInfo/themes")
+               << QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/themes")
+               << QStringLiteral("/usr/share/QDiskInfo/themes")
+               << QStringLiteral("/usr/local/share/QDiskInfo/themes")
+               << QDir::currentPath() + QStringLiteral("/themes");
+
+    QStringList result;
+    QSet<QString> seen;
+    for (const QString &candidate : std::as_const(candidates)) {
+        const QFileInfo fi(candidate);
+        if (fi.exists() && fi.isDir()) {
+            const QString canonical = fi.canonicalFilePath();
+            if (!seen.contains(canonical)) {
+                seen.insert(canonical);
+                result << canonical;
+            }
+        }
+    }
+    return result;
+}
+
+MainWindow::AoiTheme MainWindow::parseThemeIni(const QString &themeName, const QString &dirPath, const QString &bgPath) const
+{
+    AoiTheme theme;
+    theme.name = themeName;
+    theme.dirPath = dirPath;
+    theme.backgroundPath = bgPath;
+
+    const QString iniPath = dirPath + QStringLiteral("/theme.ini");
+    QFile file(iniPath);
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        auto parseHexColor = [](const QString &value, const QColor &fallback) -> QColor {
+            bool ok = false;
+            const uint rgb = value.toUInt(&ok, 0);
+            if (!ok) {
+                return fallback;
+            }
+            return QColor(static_cast<int>((rgb >> 16) & 0xFFu),
+                          static_cast<int>((rgb >> 8) & 0xFFu),
+                          static_cast<int>(rgb & 0xFFu));
+        };
+
+        QTextStream in(&file);
+        while (!in.atEnd()) {
+            const QString rawLine = in.readLine();
+            const QString cleanLine = rawLine.section(QLatin1Char(';'), 0, 0).trimmed();
+            if (cleanLine.isEmpty() || cleanLine.startsWith(QLatin1Char('['))) {
+                continue;
+            }
+            if (!cleanLine.contains(QLatin1Char('='))) {
+                continue;
+            }
+            const QString key = cleanLine.section(QLatin1Char('='), 0, 0).trimmed();
+            const QString val = cleanLine.section(QLatin1Char('='), 1).trimmed();
+
+            if (key.compare(QStringLiteral("LabelText"), Qt::CaseInsensitive) == 0) {
+                theme.labelText = parseHexColor(val, theme.labelText);
+            } else if (key.compare(QStringLiteral("ListText1"), Qt::CaseInsensitive) == 0) {
+                theme.listText = parseHexColor(val, theme.listText);
+            } else if (key.compare(QStringLiteral("ListBg1"), Qt::CaseInsensitive) == 0 ||
+                       key.compare(QStringLiteral("ListBk1"), Qt::CaseInsensitive) == 0) {
+                theme.listBg1 = parseHexColor(val, theme.listBg1);
+            } else if (key.compare(QStringLiteral("ListBg2"), Qt::CaseInsensitive) == 0 ||
+                       key.compare(QStringLiteral("ListBk2"), Qt::CaseInsensitive) == 0) {
+                theme.listBg2 = parseHexColor(val, theme.listBg2);
+            } else if (key.compare(QStringLiteral("ListLine1"), Qt::CaseInsensitive) == 0) {
+                theme.listLine = parseHexColor(val, theme.listLine);
+            } else if (key.compare(QStringLiteral("Glass"), Qt::CaseInsensitive) == 0) {
+                theme.glassColor = parseHexColor(val, theme.glassColor);
+            } else if (key.compare(QStringLiteral("GlassAlpha"), Qt::CaseInsensitive) == 0) {
+                bool ok = false;
+                const int alpha = val.toInt(&ok, 0);
+                if (ok) {
+                    theme.glassAlpha = qBound(0, alpha, 255);
+                }
+            } else if (key.compare(QStringLiteral("Position"), Qt::CaseInsensitive) == 0) {
+                bool ok = false;
+                const int pos = val.toInt(&ok, 0);
+                if (ok) {
+                    theme.characterPosition = pos;
+                }
+            }
+        }
+    }
+
+    theme.isDark = (theme.glassColor.lightness() < 128 || theme.labelText.lightness() >= 128);
+    return theme;
+}
+
+void MainWindow::initThemes()
+{
+    availableThemes.clear();
+    aoiBaseThemeDir.clear();
+
+    QSet<QString> seenNames;
+    const QStringList searchDirs = themeSearchDirs();
+    const QStringList bgCandidates = {
+        QStringLiteral("AoiBackground-300.png"),
+        QStringLiteral("AoiBackground-200.png"),
+        QStringLiteral("AoiBackground-100.png"),
+        QStringLiteral("Background-300.png")
+    };
+
+    for (const QString &baseDirPath : searchDirs) {
+        const QDir baseDir(baseDirPath);
+        const QFileInfoList entries = baseDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::IgnoreCase);
+        for (const QFileInfo &entry : entries) {
+            const QString themeName = entry.fileName();
+            const QString themeDirPath = entry.absoluteFilePath();
+
+            if (aoiBaseThemeDir.isEmpty() &&
+                (themeName.compare(QStringLiteral("Aoi"), Qt::CaseInsensitive) == 0 ||
+                 QFileInfo::exists(themeDirPath + QStringLiteral("/SDdiskStatusGood100-300.png")))) {
+                aoiBaseThemeDir = themeDirPath;
+            }
+
+            if (seenNames.contains(themeName)) {
+                continue;
+            }
+
+            QString bgPath;
+            for (const QString &bgName : bgCandidates) {
+                const QString candidate = themeDirPath + QLatin1Char('/') + bgName;
+                if (QFileInfo::exists(candidate)) {
+                    bgPath = candidate;
+                    break;
+                }
+            }
+            if (bgPath.isEmpty()) {
+                continue;
+            }
+
+            seenNames.insert(themeName);
+            availableThemes.append(parseThemeIni(themeName, themeDirPath, bgPath));
+        }
+    }
+
+    std::sort(availableThemes.begin(), availableThemes.end(), [](const AoiTheme &a, const AoiTheme &b) {
+        const bool aIsAoi = (a.name.compare(QStringLiteral("Aoi"), Qt::CaseInsensitive) == 0);
+        const bool bIsAoi = (b.name.compare(QStringLiteral("Aoi"), Qt::CaseInsensitive) == 0);
+        if (aIsAoi != bIsAoi) {
+            return aIsAoi;
+        }
+        return QString::compare(a.name, b.name, Qt::CaseInsensitive) < 0;
+    });
+}
+
+void MainWindow::setupThemeMenu()
+{
+    if (availableThemes.isEmpty()) {
+        return;
+    }
+
+    menuTheme = new QMenu(tr("&Theme"), ui->menuBar);
+    ui->menuBar->insertMenu(ui->menuHelp->menuAction(), menuTheme);
+
+    themeActionGroup = new QActionGroup(this);
+    themeActionGroup->setExclusive(true);
+
+    randomThemeAction = new QAction(tr("Random"), this);
+    randomThemeAction->setCheckable(true);
+    randomThemeAction->setData(QStringLiteral("Random"));
+    themeActionGroup->addAction(randomThemeAction);
+    menuTheme->addAction(randomThemeAction);
+    menuTheme->addSeparator();
+
+    connect(randomThemeAction, &QAction::triggered, this, [this]() {
+        settings.setValue(QStringLiteral("Theme"), QStringLiteral("Random"));
+        selectRandomTheme(true);
+    });
+
+    for (const AoiTheme &theme : std::as_const(availableThemes)) {
+        QAction *act = new QAction(theme.name, this);
+        act->setCheckable(true);
+        act->setData(theme.name);
+        themeActionGroup->addAction(act);
+        menuTheme->addAction(act);
+
+        const QString themeName = theme.name;
+        connect(act, &QAction::triggered, this, [this, themeName]() {
+            settings.setValue(QStringLiteral("Theme"), themeName);
+            randomThemeAction->setText(tr("Random"));
+            applyTheme(themeName);
+        });
+    }
+
+    const QString savedTheme = settings.value(QStringLiteral("Theme")).toString();
+    if (savedTheme.compare(QStringLiteral("Random"), Qt::CaseInsensitive) == 0) {
+        randomThemeAction->setChecked(true);
+        selectRandomTheme(false);
+    } else {
+        QAction *matchedAction = nullptr;
+        const QList<QAction *> actions = themeActionGroup->actions();
+        for (QAction *act : actions) {
+            if (act != randomThemeAction &&
+                act->data().toString().compare(savedTheme, Qt::CaseInsensitive) == 0) {
+                matchedAction = act;
+                break;
+            }
+        }
+        if (matchedAction) {
+            matchedAction->setChecked(true);
+            applyTheme(matchedAction->data().toString());
+        } else {
+            const QString defaultTheme = availableThemes.first().name;
+            for (QAction *act : actions) {
+                if (act->data().toString() == defaultTheme) {
+                    act->setChecked(true);
+                    break;
+                }
+            }
+            applyTheme(defaultTheme);
+        }
+    }
+}
+
+void MainWindow::selectRandomTheme(bool avoidCurrent)
+{
+    if (availableThemes.isEmpty()) {
+        return;
+    }
+
+    const int count = static_cast<int>(availableThemes.size());
+    int chosenIndex = 0;
+    if (count > 1) {
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            const quint32 idx = QRandomGenerator::global()->bounded(static_cast<quint32>(count));
+            chosenIndex = static_cast<int>(idx);
+            if (!avoidCurrent || availableThemes.at(chosenIndex).name != currentTheme.name) {
+                break;
+            }
+        }
+    }
+
+    const QString pickedName = availableThemes.at(chosenIndex).name;
+    if (randomThemeAction) {
+        randomThemeAction->setText(tr("Random") + QStringLiteral(" (") + pickedName + QStringLiteral(")"));
+    }
+    applyTheme(pickedName);
+}
+
+void MainWindow::updateStatusSprite()
+{
+    if (!themeEnabled || !statusLabel) {
+        return;
+    }
+
+    QStringList spriteCandidates;
+    if (currentHealth == tr("Bad")) {
+        spriteCandidates << QStringLiteral("SDdiskStatusBad-300.png");
+    } else if (currentHealth == tr("Caution")) {
+        spriteCandidates << QStringLiteral("SDdiskStatusCaution-300.png");
+    } else if (currentHealth == tr("Good")) {
+        if (currentPercentage.isEmpty() || currentPercentage == QStringLiteral("100 %")) {
+            spriteCandidates << QStringLiteral("SDdiskStatusGood100-300.png")
+                             << QStringLiteral("SDdiskStatusGood-300.png");
+        } else {
+            spriteCandidates << QStringLiteral("SDdiskStatusGood-300.png")
+                             << QStringLiteral("SDdiskStatusGood100-300.png");
+        }
+    } else {
+        spriteCandidates << QStringLiteral("SDdiskStatusUnknown-300.png");
+    }
+
+    QString spritePath;
+    for (const QString &fileName : std::as_const(spriteCandidates)) {
+        const QString themeSpecific = currentTheme.dirPath + QLatin1Char('/') + fileName;
+        if (QFileInfo::exists(themeSpecific)) {
+            spritePath = themeSpecific;
+            break;
+        }
+        if (!aoiBaseThemeDir.isEmpty()) {
+            const QString baseFallback = aoiBaseThemeDir + QLatin1Char('/') + fileName;
+            if (QFileInfo::exists(baseFallback)) {
+                spritePath = baseFallback;
+                break;
+            }
+        }
+    }
+
+    if (spritePath.isEmpty()) {
+        statusLabel->clear();
+        return;
+    }
+
+    const QPixmap statusPixmap(spritePath);
+    if (statusPixmap.isNull()) {
+        statusLabel->clear();
+        return;
+    }
+
+    const qreal dpr = this->devicePixelRatioF();
+    const QSize logicalSize(100, 150);
+    const QSize targetPx(qMax(1, qRound(logicalSize.width() * dpr)),
+                         qMax(1, qRound(logicalSize.height() * dpr)));
+    QPixmap scaled = statusPixmap.scaled(targetPx, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    scaled.setDevicePixelRatio(dpr);
+    statusLabel->setPixmap(scaled);
+    statusLabel->setToolTip(currentHealth);
+}
+
+void MainWindow::applyTheme(const QString &themeName)
+{
+    if (availableThemes.isEmpty()) {
+        return;
+    }
+
+    int foundIndex = 0;
+    for (int i = 0; i < static_cast<int>(availableThemes.size()); ++i) {
+        if (availableThemes.at(i).name.compare(themeName, Qt::CaseInsensitive) == 0) {
+            foundIndex = i;
+            break;
+        }
+    }
+
+    currentTheme = availableThemes.at(foundIndex);
+    currentBackgroundPixmap = QPixmap(currentTheme.backgroundPath);
+    cachedScaledBackground = QPixmap();
+    cachedBackgroundSize = QSize();
+    cachedBackgroundDpr = 0.0;
+
+    const QString labelHex = currentTheme.labelText.name();
+    const QString listTextHex = currentTheme.listText.name();
+    const QString listLineHex = currentTheme.listLine.name();
+    const QString headerBg = currentTheme.isDark
+        ? QStringLiteral("rgba(40, 40, 40, 210)")
+        : QStringLiteral("rgba(240, 240, 240, 210)");
+
+    const QString qss = QStringLiteral(
+        "QWidget#centralwidget { background: transparent; }"
+        "QScrollArea#scrollArea, QScrollArea#scrollArea > QWidget#qt_scrollarea_viewport, QWidget#scrollAreaWidgetContents { background: transparent; border: none; }"
+        "QLabel { color: %1; background: transparent; }"
+        "QLineEdit { background-color: rgba(%2, %3, %4, 195); color: %5; border: 1px solid %6; border-radius: 3px; padding: 2px 4px; }"
+        "QTableWidget#dataTable { background-color: rgba(%2, %3, %4, 185); alternate-background-color: rgba(%7, %8, %9, 185); color: %5; gridline-color: %6; border: 1px solid %6; }"
+        "QTableWidget#dataTable > QWidget#qt_scrollarea_viewport { background: transparent; }"
+        "QTableWidget#dataTable::item { color: %5; }"
+        "QTableWidget#dataTable QHeaderView { background-color: transparent; }"
+        "QTableWidget#dataTable QHeaderView::section { background-color: %10; color: %5; border: 1px solid %6; padding: 4px; }"
+        "QTableWidget#dataTable QTableCornerButton::section { background-color: %10; border: 1px solid %6; }"
+    )
+        .arg(labelHex)
+        .arg(currentTheme.listBg1.red())
+        .arg(currentTheme.listBg1.green())
+        .arg(currentTheme.listBg1.blue())
+        .arg(listTextHex)
+        .arg(listLineHex)
+        .arg(currentTheme.listBg2.red())
+        .arg(currentTheme.listBg2.green())
+        .arg(currentTheme.listBg2.blue())
+        .arg(headerBg);
+
+    ui->centralwidget->setStyleSheet(qss);
+    updateStatusSprite();
+    update();
+}
+
+void MainWindow::transformWindow()
+{
+    setMinimumSize(860, 540);
     resize(960, 600);
 
     QLayoutItem *item;
@@ -1256,40 +1634,97 @@ void MainWindow::transformWindow() {
         }
         delete item;
     }
+    temperatureValue = nullptr;
+    healthStatusValue = nullptr;
 
+    statusLabel->setAlignment(Qt::AlignCenter);
     verticalLayout->addWidget(statusLabel);
 
+    characterSpacer = new QWidget(ui->centralwidget);
+    characterSpacer->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    characterSpacer->setStyleSheet(QStringLiteral("background: transparent;"));
+    characterSpacer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Minimum);
+    characterSpacer->setMinimumWidth(200);
+
     if (CHARACTER_IS_RIGHT) {
-        QSpacerItem *spacer = new QSpacerItem(40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum);
-        gridLayout->addItem(spacer,3,3);
-        setMinimumWidth(645);
+        gridLayout->addWidget(characterSpacer, 0, 2, 4, 1);
+        gridLayout->setColumnStretch(0, 0);
+        gridLayout->setColumnStretch(1, 67);
+        gridLayout->setColumnStretch(2, 33);
     } else {
-        setMinimumWidth(960);
+        QLayoutItem *leftSpacerItem = gridLayout->itemAtPosition(2, 0);
+        if (leftSpacerItem) {
+            gridLayout->removeItem(leftSpacerItem);
+            delete leftSpacerItem->widget();
+            delete leftSpacerItem;
+        }
+        gridLayout->addWidget(characterSpacer, 0, 0, 4, 1);
+        gridLayout->setColumnStretch(0, 33);
+        gridLayout->setColumnStretch(1, 67);
     }
 
-    QHBoxLayout *infoLayout = ui->centralwidget->findChild<QHBoxLayout*>("info");
-    QSpacerItem *spacerItem = infoLayout->itemAt(1)->spacerItem();
-    if (spacerItem) {
+    QHBoxLayout *infoLayout = ui->centralwidget->findChild<QHBoxLayout*>(QStringLiteral("info"));
+    if (infoLayout && infoLayout->count() > 1) {
+        QLayoutItem *spacerItem = infoLayout->itemAt(1);
+        if (spacerItem && spacerItem->spacerItem()) {
             infoLayout->removeItem(spacerItem);
             delete spacerItem;
+        }
     }
 
-    QPalette palette = QApplication::palette();
-    QColor backgroundColor = palette.color(QPalette::Window);
-    int lightness = backgroundColor.lightness();
-    bool darkTheme = lightness < 128;
+    ui->centralwidget->setAutoFillBackground(false);
+    ui->scrollArea->setAutoFillBackground(false);
+    ui->scrollArea->viewport()->setAutoFillBackground(false);
+    ui->scrollAreaWidgetContents->setAutoFillBackground(false);
+    tableWidget->setAutoFillBackground(false);
+    tableWidget->viewport()->setAutoFillBackground(false);
+    tableWidget->setAlternatingRowColors(true);
+}
 
-    QPixmap animeBackground;
-    if (darkTheme) {
-        animeBackground = QPixmap(":/icons/bg_dark.png");
-    } else {
-        animeBackground = QPixmap(":/icons/bg_light.png");
+void MainWindow::paintEvent(QPaintEvent *event)
+{
+    QMainWindow::paintEvent(event);
+
+    if (!themeEnabled || currentBackgroundPixmap.isNull()) {
+        return;
     }
 
-    animeBackground = animeBackground.scaled(this->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-    palette.setBrush(QPalette::Window, QBrush(animeBackground));
-    ui->centralwidget->setPalette(palette);
-    ui->centralwidget->setAutoFillBackground(true);
+    const QRect targetRect = ui->centralwidget->geometry();
+    if (!targetRect.isValid() || targetRect.isEmpty()) {
+        return;
+    }
+
+    const qreal dpr = this->devicePixelRatioF();
+    if (cachedScaledBackground.isNull() ||
+        cachedBackgroundSize != targetRect.size() ||
+        !qFuzzyCompare(cachedBackgroundDpr, dpr)) {
+        const QSize physicalTarget(qMax(1, qRound(targetRect.width() * dpr)),
+                                   qMax(1, qRound(targetRect.height() * dpr)));
+        cachedScaledBackground = currentBackgroundPixmap.scaled(
+            physicalTarget,
+            Qt::KeepAspectRatioByExpanding,
+            Qt::SmoothTransformation);
+        cachedScaledBackground.setDevicePixelRatio(dpr);
+        cachedBackgroundSize = targetRect.size();
+        cachedBackgroundDpr = dpr;
+    }
+
+    const int logicalWidth = qRound(cachedScaledBackground.width() / dpr);
+    const bool alignRight = (CHARACTER_IS_RIGHT && currentTheme.characterPosition != 0);
+    const int drawX = alignRight ? (targetRect.right() - logicalWidth + 1) : targetRect.left();
+    const int drawY = targetRect.top();
+
+    QPainter painter(this);
+    painter.setClipRect(targetRect, Qt::IntersectClip);
+    painter.drawPixmap(drawX, drawY, cachedScaledBackground);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    if (themeEnabled) {
+        update();
+    }
 }
 
 void MainWindow::mousePressEvent(QMouseEvent *event)
@@ -1431,6 +1866,24 @@ void MainWindow::on_actionClear_Settings_triggered()
         ui->actionUse_Fahrenheit->setChecked(false);
         ui->actionCyclic_Navigation->setChecked(false);
         ui->actionUse_GB_instead_of_TB->setChecked(false);
+
+        if (themeEnabled && !availableThemes.isEmpty()) {
+            const QString defaultTheme = availableThemes.first().name;
+            settings.setValue(QStringLiteral("Theme"), defaultTheme);
+            if (randomThemeAction) {
+                randomThemeAction->setText(tr("Random"));
+            }
+            if (themeActionGroup) {
+                const QList<QAction *> actions = themeActionGroup->actions();
+                for (QAction *act : actions) {
+                    if (act->data().toString() == defaultTheme) {
+                        act->setChecked(true);
+                        break;
+                    }
+                }
+            }
+            applyTheme(defaultTheme);
+        }
 
         if (!initializing) {
             updateUI(Utils.clearButtonGroup(buttonGroup, horizontalLayout, buttonStretch, menuDisk));

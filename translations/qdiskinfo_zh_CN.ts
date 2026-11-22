@@ -366,6 +366,14 @@
         <source>PNG Files (*.png)</source>
         <translation type="unfinished">PNG Files (*.png)</translation>
     </message>
+    <message>
+        <source>&amp;Theme</source>
+        <translation>主题 (&amp;T)</translation>
+    </message>
+    <message>
+        <source>Random</source>
+        <translation>随机</translation>
+    </message>
 </context>
 <context>
     <name>QObject</name>
